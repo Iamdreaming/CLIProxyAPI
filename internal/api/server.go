@@ -51,6 +51,7 @@ type serverOptionConfig struct {
 	keepAliveEnabled     bool
 	keepAliveTimeout     time.Duration
 	keepAliveOnTimeout   func()
+	postgresPlugin       interface{ IsActive() bool }
 }
 
 // ServerOption customises HTTP server construction.
@@ -108,6 +109,13 @@ func WithKeepAliveEndpoint(timeout time.Duration, onTimeout func()) ServerOption
 func WithRequestLoggerFactory(factory func(*config.Config, string) logging.RequestLogger) ServerOption {
 	return func(cfg *serverOptionConfig) {
 		cfg.requestLoggerFactory = factory
+	}
+}
+
+// WithPostgresPlugin sets the PostgreSQL storage plugin for usage statistics.
+func WithPostgresPlugin(plugin interface{ IsActive() bool }) ServerOption {
+	return func(cfg *serverOptionConfig) {
+		cfg.postgresPlugin = plugin
 	}
 }
 
@@ -263,6 +271,9 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	logDir := logging.ResolveLogDirectory(cfg)
 	s.mgmt.SetLogDirectory(logDir)
 	s.localPassword = optionState.localPassword
+	if optionState.postgresPlugin != nil {
+		s.mgmt.SetPostgresPlugin(optionState.postgresPlugin)
+	}
 
 	// Setup routes
 	s.setupRoutes()
@@ -1006,6 +1017,16 @@ func (s *Server) SetWebsocketAuthChangeHandler(fn func(bool, bool)) {
 		return
 	}
 	s.wsAuthChanged = fn
+}
+
+// SetPostgresPlugin sets the PostgreSQL storage plugin for usage statistics.
+func (s *Server) SetPostgresPlugin(plugin interface{ IsActive() bool }) {
+	if s == nil {
+		return
+	}
+	if s.mgmt != nil {
+		s.mgmt.SetPostgresPlugin(plugin)
+	}
 }
 
 // (management handlers moved to internal/api/handlers/management)

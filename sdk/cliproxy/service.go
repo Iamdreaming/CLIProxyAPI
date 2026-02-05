@@ -89,6 +89,9 @@ type Service struct {
 
 	// wsGateway manages websocket Gemini providers.
 	wsGateway *wsrelay.Manager
+
+	// postgresPlugin is the PostgreSQL storage plugin for usage statistics.
+	postgresPlugin interface{ IsActive() bool }
 }
 
 // RegisterUsagePlugin registers a usage plugin on the global usage manager.
@@ -463,6 +466,11 @@ func (s *Service) Run(ctx context.Context) error {
 	// handlers no longer depend on legacy clients; pass nil slice initially
 	s.server = api.NewServer(s.cfg, s.coreManager, s.accessManager, s.configPath, s.serverOptions...)
 
+	// Inject PostgreSQL plugin into management handler
+	if s.postgresPlugin != nil && s.server != nil {
+		s.server.SetPostgresPlugin(s.postgresPlugin)
+	}
+
 	if s.authManager == nil {
 		s.authManager = newDefaultAuthManager()
 	}
@@ -825,6 +833,9 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 			}
 			for i := range s.cfg.OpenAICompatibility {
 				compat := &s.cfg.OpenAICompatibility[i]
+				if !compat.IsEnabled() {
+					continue // Skip disabled vendors
+				}
 				if strings.EqualFold(compat.Name, compatName) {
 					isCompatAuth = true
 					// Convert compatibility models to registry models

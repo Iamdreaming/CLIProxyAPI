@@ -47,6 +47,9 @@ type Builder struct {
 
 	// serverOptions contains additional server configuration options.
 	serverOptions []api.ServerOption
+
+	// postgresPlugin is the PostgreSQL storage plugin for usage statistics.
+	postgresPlugin interface{ IsActive() bool }
 }
 
 // Hooks allows callers to plug into service lifecycle stages.
@@ -152,6 +155,12 @@ func (b *Builder) WithLocalManagementPassword(password string) *Builder {
 	return b
 }
 
+// WithPostgresPlugin sets the PostgreSQL storage plugin for usage statistics.
+func (b *Builder) WithPostgresPlugin(plugin interface{ IsActive() bool }) *Builder {
+	b.postgresPlugin = plugin
+	return b
+}
+
 // Build validates inputs, applies defaults, and returns a ready-to-run service.
 func (b *Builder) Build() (*Service, error) {
 	if b.cfg == nil {
@@ -229,6 +238,7 @@ func (b *Builder) Build() (*Service, error) {
 		accessManager:  accessManager,
 		coreManager:    coreManager,
 		serverOptions:  append([]api.ServerOption(nil), b.serverOptions...),
+		postgresPlugin: b.postgresPlugin,
 	}
 	return service, nil
 }

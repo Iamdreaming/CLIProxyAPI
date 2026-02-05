@@ -47,6 +47,9 @@ type Config struct {
 	// Pprof config controls the optional pprof HTTP debug server.
 	Pprof PprofConfig `yaml:"pprof" json:"pprof"`
 
+	// PostgresStorage config controls the PostgreSQL storage backend for usage statistics.
+	PostgresStorage PostgresStorageConfig `yaml:"postgres-storage" json:"postgres-storage"`
+
 	// CommercialMode disables high-overhead HTTP middleware features to minimize per-request memory usage.
 	CommercialMode bool `yaml:"commercial-mode" json:"commercial-mode"`
 
@@ -133,6 +136,22 @@ type PprofConfig struct {
 	Enable bool `yaml:"enable" json:"enable"`
 	// Addr is the host:port address for the pprof HTTP server.
 	Addr string `yaml:"addr" json:"addr"`
+}
+
+// PostgresStorageConfig holds PostgreSQL storage backend settings.
+type PostgresStorageConfig struct {
+	// Enable toggles the PostgreSQL storage backend.
+	Enable bool `yaml:"enable" json:"enable"`
+	// DSN is the PostgreSQL connection string (e.g., "postgres://user:pass@localhost:5432/dbname?sslmode=disable").
+	DSN string `yaml:"dsn" json:"dsn"`
+	// MaxConns is the maximum number of connections in the pool.
+	MaxConns int32 `yaml:"max-conns" json:"max-conns"`
+	// MinConns is the minimum number of connections in the pool.
+	MinConns int32 `yaml:"min-conns" json:"min-conns"`
+	// MaxConnLifetime is the maximum lifetime of a connection (e.g., "1h", "30m").
+	MaxConnLifetime string `yaml:"max-conn-lifetime" json:"max-conn-lifetime"`
+	// MaxConnIdleTime is the maximum idle time of a connection (e.g., "30m", "15m").
+	MaxConnIdleTime string `yaml:"max-conn-idle-time" json:"max-conn-idle-time"`
 }
 
 // RemoteManagement holds management API configuration under 'remote-management'.
@@ -433,6 +452,11 @@ type OpenAICompatibility struct {
 	// Name is the identifier for this OpenAI compatibility configuration.
 	Name string `yaml:"name" json:"name"`
 
+	// Enabled controls whether this vendor is active for routing.
+	// When false, the vendor is skipped during model routing and API key selection.
+	// Defaults to true if omitted.
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+
 	// Priority controls selection preference when multiple providers or credentials match.
 	// Higher values are preferred; defaults to 0.
 	Priority int `yaml:"priority,omitempty" json:"priority,omitempty"`
@@ -474,6 +498,12 @@ type OpenAICompatibilityModel struct {
 
 func (m OpenAICompatibilityModel) GetName() string  { return m.Name }
 func (m OpenAICompatibilityModel) GetAlias() string { return m.Alias }
+
+// IsEnabled returns whether this vendor is enabled for routing.
+// Returns true if Enabled is nil (default) or explicitly set to true.
+func (o OpenAICompatibility) IsEnabled() bool {
+	return o.Enabled == nil || *o.Enabled
+}
 
 // LoadConfig reads a YAML configuration file from the given path,
 // unmarshals it into a Config struct, applies environment variable overrides,

@@ -48,3 +48,6 @@ _bmad-output/*
 # macOS
 .DS_Store
 ._*
+dist/artifacts.json
+dist/metadata.json
+dist/cli-proxy-api_linux_amd64_v1/static/management.html

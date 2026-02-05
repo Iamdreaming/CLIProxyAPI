@@ -47,6 +47,7 @@ type Handler struct {
 	allowRemoteOverride bool
 	envSecret           string
 	logDir              string
+	postgresPlugin      interface{ IsActive() bool } // PostgreSQL storage plugin
 }
 
 // NewHandler creates a new management handler instance.
@@ -127,6 +128,9 @@ func (h *Handler) SetLogDirectory(dir string) {
 	}
 	h.logDir = dir
 }
+
+// SetPostgresPlugin sets the PostgreSQL storage plugin for query operations.
+func (h *Handler) SetPostgresPlugin(plugin interface{ IsActive() bool }) { h.postgresPlugin = plugin }
 
 // Middleware enforces access control for management endpoints.
 // All requests (local and remote) require a valid management key.

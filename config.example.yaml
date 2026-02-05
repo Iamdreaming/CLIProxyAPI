@@ -45,6 +45,16 @@ pprof:
   enable: false
   addr: "127.0.0.1:8316"
 
+# PostgreSQL storage backend for persistent usage statistics and request logs.
+# When enabled, all usage records are stored in PostgreSQL for historical analysis.
+postgres-storage:
+  enable: false
+  dsn: "postgres://user:password@localhost:5432/cliproxy?sslmode=disable"
+  max-conns: 10
+  min-conns: 2
+  max-conn-lifetime: "1h"
+  max-conn-idle-time: "30m"
+
 # When true, disable high-overhead HTTP middleware features to reduce per-request memory usage under high concurrency.
 commercial-mode: false
 
@@ -159,6 +169,7 @@ nonstream-keepalive-interval: 0
 # OpenAI compatibility providers
 # openai-compatibility:
 #   - name: "openrouter" # The name of the provider; it will be used in the user agent and other places.
+#     enabled: true # optional: set to false to disable this vendor without removing it (default: true)
 #     prefix: "test" # optional: require calls like "test/kimi-k2" to target this provider's credentials
 #     base-url: "https://openrouter.ai/api/v1" # The base URL of the provider.
 #     headers:

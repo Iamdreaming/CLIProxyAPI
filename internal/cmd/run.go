@@ -12,7 +12,9 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/storage/postgres"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy"
+	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -43,15 +45,54 @@ func StartService(cfg *config.Config, configPath string, localPassword string) {
 		}))
 	}
 
+	// Initialize PostgreSQL storage if configured
+	var pgPlugin *postgres.Plugin
+	var pgClose func()
+	if cfg.PostgresStorage.Enable {
+		var err error
+		pgPlugin, err = postgres.InitFromConfig(
+			cfg.PostgresStorage.Enable,
+			cfg.PostgresStorage.DSN,
+			cfg.PostgresStorage.MaxConns,
+			cfg.PostgresStorage.MinConns,
+			cfg.PostgresStorage.MaxConnLifetime,
+			cfg.PostgresStorage.MaxConnIdleTime,
+		)
+		if err != nil {
+			log.Errorf("failed to initialize PostgreSQL storage: %v", err)
+		}
+		if pgPlugin != nil {
+			// Register the plugin with the global usage manager
+			usage.RegisterPlugin(pgPlugin)
+			log.Info("PostgreSQL storage plugin registered with usage manager")
+
+			builder = builder.WithPostgresPlugin(pgPlugin)
+			pgClose = func() {
+				pgPlugin.Close()
+				if pgPlugin.Pool() != nil {
+					pgPlugin.Pool().Close()
+				}
+			}
+		}
+	}
+
 	service, err := builder.Build()
 	if err != nil {
 		log.Errorf("failed to build proxy service: %v", err)
+		if pgClose != nil {
+			pgClose()
+		}
 		return
 	}
 
 	err = service.Run(runCtx)
 	if err != nil && !errors.Is(err, context.Canceled) {
 		log.Errorf("proxy service exited with error: %v", err)
+	}
+
+	// Cleanup PostgreSQL resources
+	if pgClose != nil {
+		pgClose()
 	}
 }
 
