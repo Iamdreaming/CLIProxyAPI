@@ -44,6 +44,10 @@ GEMINI.md
 .bmad/*
 _bmad/*
 _bmad-output/*
+.playwright-mcp/*
+
+# Local frontend checkout
+frontend/*
 
 # macOS
 .DS_Store
