@@ -25,6 +25,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/modules"
 	ampmodule "github.com/router-for-me/CLIProxyAPI/v6/internal/api/modules/amp"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/failure"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/managementasset"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
@@ -171,6 +172,9 @@ type Server struct {
 	// envManagementSecret indicates whether MANAGEMENT_PASSWORD is configured.
 	envManagementSecret bool
 
+	// failureTracker handles automatic failure-based model disabling.
+	failureTracker failure.FailureTracker
+
 	localPassword string
 
 	keepAliveEnabled   bool
@@ -273,6 +277,14 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	s.localPassword = optionState.localPassword
 	if optionState.postgresPlugin != nil {
 		s.mgmt.SetPostgresPlugin(optionState.postgresPlugin)
+	}
+
+	// Initialize failure tracker if auto-disable is configured
+	if cfg.AutoDisable != nil || s.hasAnyOpenAICompatibilityModels(cfg) {
+		tracker := failure.NewFailureTracker(cfg.AutoDisable)
+		s.failureTracker = tracker
+		s.mgmt.SetFailureTracker(tracker)
+		log.Info("failure tracking initialized")
 	}
 
 	// Setup routes
@@ -489,6 +501,9 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/usage", s.mgmt.GetUsageStatistics)
 		mgmt.GET("/usage/export", s.mgmt.ExportUsageStatistics)
 		mgmt.POST("/usage/import", s.mgmt.ImportUsageStatistics)
+
+		mgmt.GET("/stats/providers", s.mgmt.GetProviderStats)
+		mgmt.GET("/vendor-error-logs", s.mgmt.GetVendorErrorLogs)
 		mgmt.GET("/config", s.mgmt.GetConfig)
 		mgmt.GET("/config.yaml", s.mgmt.GetConfigYAML)
 		mgmt.PUT("/config.yaml", s.mgmt.PutConfigYAML)
@@ -638,6 +653,12 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.POST("/iflow-auth-url", s.mgmt.RequestIFlowCookieToken)
 		mgmt.POST("/oauth-callback", s.mgmt.PostOAuthCallback)
 		mgmt.GET("/get-auth-status", s.mgmt.GetAuthStatus)
+
+		// Failure tracking endpoints
+		mgmt.GET("/models/disabled", s.mgmt.GetDisabledModels)
+		mgmt.GET("/models/:modelId/status", s.mgmt.GetModelStatus)
+		mgmt.POST("/models/:modelId/enable", s.mgmt.EnableModel)
+		mgmt.POST("/models/enable-all", s.mgmt.EnableAllModels)
 	}
 }
 
@@ -1064,4 +1085,12 @@ func AuthMiddleware(manager *sdkaccess.Manager) gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "Authentication service error"})
 		}
 	}
+}
+
+// hasAnyOpenAICompatibilityModels checks if the config has any OpenAI compatibility providers with models.
+func (s *Server) hasAnyOpenAICompatibilityModels(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	return len(cfg.OpenAICompatibility) > 0
 }

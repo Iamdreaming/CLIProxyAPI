@@ -117,6 +117,11 @@ type Config struct {
 	// Payload defines default and override rules for provider payload parameters.
 	Payload PayloadConfig `yaml:"payload" json:"payload"`
 
+	// AutoDisable configures global automatic failure-based model disabling.
+	// When set, models that fail repeatedly within the configured time window
+	// will be automatically disabled for the configured duration.
+	AutoDisable *AutoDisableConfig `yaml:"auto-disable,omitempty" json:"auto-disable,omitempty"`
+
 	legacyMigrationPending bool `yaml:"-" json:"-"`
 }
 
@@ -446,6 +451,45 @@ type GeminiModel struct {
 func (m GeminiModel) GetName() string  { return m.Name }
 func (m GeminiModel) GetAlias() string { return m.Alias }
 
+// AutoDisableConfig configures automatic failure-based model disabling.
+// When configured, models that fail repeatedly within the time window
+// will be automatically disabled for the configured duration.
+type AutoDisableConfig struct {
+	// FailureThreshold is the number of failures within the time window
+	// required to trigger automatic disabling. Defaults to 5.
+	FailureThreshold int `yaml:"failure-threshold,omitempty" json:"failure-threshold,omitempty"`
+
+	// TimeWindowSeconds is the duration in seconds for counting failures.
+	// Failures older than this window are not counted. Defaults to 60.
+	TimeWindowSeconds int `yaml:"time-window-seconds,omitempty" json:"time-window-seconds,omitempty"`
+
+	// DisableDurationSeconds is the duration in seconds that a model
+	// remains disabled before automatic re-enablement. Defaults to 300.
+	DisableDurationSeconds int `yaml:"disable-duration-seconds,omitempty" json:"disable-duration-seconds,omitempty"`
+}
+
+// GetEffectiveConfig returns the effective config, applying defaults for zero values.
+func (c *AutoDisableConfig) GetEffectiveConfig() AutoDisableConfig {
+	if c == nil {
+		return AutoDisableConfig{
+			FailureThreshold:     5,
+			TimeWindowSeconds:    60,
+			DisableDurationSeconds: 300,
+		}
+	}
+	cfg := *c
+	if cfg.FailureThreshold <= 0 {
+		cfg.FailureThreshold = 5
+	}
+	if cfg.TimeWindowSeconds <= 0 {
+		cfg.TimeWindowSeconds = 60
+	}
+	if cfg.DisableDurationSeconds <= 0 {
+		cfg.DisableDurationSeconds = 300
+	}
+	return cfg
+}
+
 // OpenAICompatibility represents the configuration for OpenAI API compatibility
 // with external providers, allowing model aliases to be routed through OpenAI API format.
 type OpenAICompatibility struct {
@@ -475,6 +519,10 @@ type OpenAICompatibility struct {
 
 	// Headers optionally adds extra HTTP headers for requests sent to this provider.
 	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
+
+	// AutoDisable configures automatic failure-based disabling for this vendor's models.
+	// When nil, inherits from global auto-disable settings.
+	AutoDisable *AutoDisableConfig `yaml:"auto-disable,omitempty" json:"auto-disable,omitempty"`
 }
 
 // OpenAICompatibilityAPIKey represents an API key configuration with optional proxy setting.
@@ -494,6 +542,15 @@ type OpenAICompatibilityModel struct {
 
 	// Alias is the model name alias that clients will use to reference this model.
 	Alias string `yaml:"alias" json:"alias"`
+
+	// Enabled controls whether this specific model is active for routing.
+	// When false, the model is skipped during routing even if the vendor is enabled.
+	// Defaults to true if omitted.
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+
+	// AutoDisable configures automatic failure-based disabling for this model.
+	// When nil, inherits from vendor-level or global auto-disable settings.
+	AutoDisable *AutoDisableConfig `yaml:"auto-disable,omitempty" json:"auto-disable,omitempty"`
 }
 
 func (m OpenAICompatibilityModel) GetName() string  { return m.Name }

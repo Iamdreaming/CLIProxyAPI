@@ -329,7 +329,7 @@ func (e *GeminiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		}
 		if errScan := scanner.Err(); errScan != nil {
 			recordAPIResponseError(ctx, e.cfg, errScan)
-			reporter.publishFailure(ctx)
+			reporter.publishFailure(ctx, errScan)
 			out <- cliproxyexecutor.StreamChunk{Err: errScan}
 		}
 	}()

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/failure"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
@@ -172,6 +173,15 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 	var param any
 	out := sdktranslator.TranslateNonStream(ctx, to, from, req.Model, bytes.Clone(opts.OriginalRequest), translated, body, &param)
 	resp = cliproxyexecutor.Response{Payload: []byte(out)}
+
+	// Track success in the failure tracker
+	trackSuccess := func() {
+		tracker := failure.GetGlobalFailureTracker()
+		if tracker != nil {
+			_ = tracker.TrackSuccess(e.Identifier(), baseModel)
+		}
+	}
+	trackSuccess()
 	return resp, nil
 }
 
@@ -290,7 +300,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		}
 		if errScan := scanner.Err(); errScan != nil {
 			recordAPIResponseError(ctx, e.cfg, errScan)
-			reporter.publishFailure(ctx)
+			reporter.publishFailure(ctx, errScan)
 			out <- cliproxyexecutor.StreamChunk{Err: errScan}
 		}
 		// Ensure we record the request if no usage chunk was ever seen

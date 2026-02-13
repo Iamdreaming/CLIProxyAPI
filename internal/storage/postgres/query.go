@@ -4,6 +4,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -47,6 +48,15 @@ type ModelStats struct {
 	Details       []RequestDetail `json:"details"`
 }
 
+// TokenStats captures the token usage breakdown for a request.
+type TokenStats struct {
+	InputTokens     int64 `json:"input_tokens"`
+	OutputTokens    int64 `json:"output_tokens"`
+	ReasoningTokens int64 `json:"reasoning_tokens"`
+	CachedTokens    int64 `json:"cached_tokens"`
+	TotalTokens     int64 `json:"total_tokens"`
+}
+
 // RequestDetail stores the timestamp and token usage for a single request.
 type RequestDetail struct {
 	Timestamp time.Time  `json:"timestamp"`
@@ -56,14 +66,85 @@ type RequestDetail struct {
 	Failed    bool       `json:"failed"`
 }
 
-// TokenStats captures the token usage breakdown for a request.
-type TokenStats struct {
-	InputTokens     int64 `json:"input_tokens"`
-	OutputTokens    int64 `json:"output_tokens"`
-	ReasoningTokens int64 `json:"reasoning_tokens"`
-	CachedTokens    int64 `json:"cached_tokens"`
-	TotalTokens     int64 `json:"total_tokens"`
+// ProviderStatsResult holds aggregated statistics per provider.
+type ProviderStatsResult struct {
+	Providers []ProviderStats `json:"providers"`
+	TimeRange TimeRange       `json:"time_range"`
 }
+
+// ProviderStats holds statistics for a single provider.
+type ProviderStats struct {
+	Name             string     `json:"name"`
+	TotalRequests    int64      `json:"total_requests"`
+	SuccessCount     int64      `json:"success_count"`
+	FailureCount     int64      `json:"failure_count"`
+	SuccessRate      float64    `json:"success_rate"`
+	AvgLatencyMs     float64    `json:"avg_latency_ms"`
+	P50LatencyMs     *float64   `json:"p50_latency_ms,omitempty"`
+	P95LatencyMs     *float64   `json:"p95_latency_ms,omitempty"`
+	P99LatencyMs     *float64   `json:"p99_latency_ms,omitempty"`
+	InputTokens      int64      `json:"input_tokens"`
+	OutputTokens     int64      `json:"output_tokens"`
+	ReasoningTokens  int64      `json:"reasoning_tokens"`
+	CachedTokens     int64      `json:"cached_tokens"`
+	TotalTokens      int64      `json:"total_tokens"`
+	LastCalledAt     *time.Time `json:"last_called_at,omitempty"`
+}
+
+// VendorErrorLogEntry represents a failed upstream vendor request log entry.
+type VendorErrorLogEntry struct {
+	Provider        string    `json:"provider"`
+	Model           string    `json:"model"`
+	APIKey          string    `json:"api_key"`
+	AuthID          string    `json:"auth_id"`
+	AuthIndex       string    `json:"auth_index"`
+	Source          string    `json:"source"`
+	RequestedAt     time.Time `json:"requested_at"`
+	VendorErrorLog  string    `json:"vendor_error_log"`
+	RequestURL      string    `json:"request_url"`
+	InputTokens     int64     `json:"input_tokens"`
+	OutputTokens    int64     `json:"output_tokens"`
+	ReasoningTokens int64     `json:"reasoning_tokens"`
+	CachedTokens    int64     `json:"cached_tokens"`
+	TotalTokens     int64     `json:"total_tokens"`
+}
+
+// VendorErrorLogListResult holds a list response for vendor error logs.
+type VendorErrorLogListResult struct {
+	Entries   []VendorErrorLogEntry `json:"entries"`
+	Total     int64                 `json:"total"`
+	Page      int                   `json:"page"`
+	Limit     int                   `json:"limit"`
+	TimeRange TimeRange            `json:"time_range"`
+	Provider  string                `json:"provider,omitempty"`
+}
+
+// VendorErrorLogListOptions holds filters for vendor error logs.
+type VendorErrorLogListOptions struct {
+	StartTime *time.Time
+	EndTime   *time.Time
+	Provider  string
+	Page      int
+	Limit     int
+}
+
+// TimeRange represents the time range for the query.
+type TimeRange struct {
+	Start *time.Time `json:"start,omitempty"`
+	End   *time.Time `json:"end,omitempty"`
+}
+
+// TimeRangePreset represents a preset time range.
+type TimeRangePreset string
+
+const (
+	PresetToday      TimeRangePreset = "today"
+	PresetThisWeek   TimeRangePreset = "this_week"
+	PresetThisMonth  TimeRangePreset = "this_month"
+	PresetLast7Days  TimeRangePreset = "last_7_days"
+	PresetLast30Days TimeRangePreset = "last_30_days"
+	PresetCustom     TimeRangePreset = "custom"
+)
 
 // QueryStats retrieves aggregated usage statistics from PostgreSQL.
 func QueryStats(ctx context.Context, pool *pgxpool.Pool, opts QueryOptions) (*QueryResult, error) {
@@ -81,7 +162,7 @@ func QueryStats(ctx context.Context, pool *pgxpool.Pool, opts QueryOptions) (*Qu
 
 	// Build WHERE clause
 	whereClause := ""
-	args := []interface{}{}
+	args := []any{}
 	argIdx := 1
 
 	if opts.StartTime != nil || opts.EndTime != nil {
@@ -133,17 +214,17 @@ func joinConditions(conditions []string) string {
 	if len(conditions) == 0 {
 		return ""
 	}
-	result := ""
+	var sb strings.Builder
 	for i, c := range conditions {
 		if i > 0 {
-			result += " AND "
+			sb.WriteString(" AND ")
 		}
-		result += c
+		sb.WriteString(c)
 	}
-	return result
+	return sb.String()
 }
 
-func queryOverallStats(ctx context.Context, pool *pgxpool.Pool, whereClause string, args []interface{}, result *QueryResult) error {
+func queryOverallStats(ctx context.Context, pool *pgxpool.Pool, whereClause string, args []any, result *QueryResult) error {
 	query := `
 SELECT
 	COUNT(*) as total_requests,
@@ -167,7 +248,7 @@ FROM usage_records
 	return nil
 }
 
-func queryDayStats(ctx context.Context, pool *pgxpool.Pool, whereClause string, args []interface{}, result *QueryResult) error {
+func queryDayStats(ctx context.Context, pool *pgxpool.Pool, whereClause string, args []any, result *QueryResult) error {
 	// Use UTC timezone to match memory statistics
 	query := `
 SELECT
@@ -203,7 +284,7 @@ ORDER BY day
 	return rows.Err()
 }
 
-func queryHourStats(ctx context.Context, pool *pgxpool.Pool, whereClause string, args []interface{}, result *QueryResult) error {
+func queryHourStats(ctx context.Context, pool *pgxpool.Pool, whereClause string, args []any, result *QueryResult) error {
 	// Query hourly stats grouped by date and hour to get meaningful hourly distribution
 	// Use UTC timezone to match the formatHour function in usage package
 	query := `
@@ -267,7 +348,7 @@ ORDER BY day, hour
 	return rows.Err()
 }
 
-func queryAPIStats(ctx context.Context, pool *pgxpool.Pool, whereClause string, args []interface{}, result *QueryResult) error {
+func queryAPIStats(ctx context.Context, pool *pgxpool.Pool, whereClause string, args []any, result *QueryResult) error {
 	// First, get aggregated stats
 	aggQuery := `
 SELECT
@@ -394,4 +475,276 @@ ORDER BY api_key, model, requested_at
 	}
 
 	return detailRows.Err()
+}
+
+// ParseTimeRangePreset parses a time range preset and returns start/end times.
+func ParseTimeRangePreset(preset TimeRangePreset, start, end *time.Time) (*time.Time, *time.Time, error) {
+	now := time.Now().UTC()
+	var startTime, endTime time.Time
+
+	switch preset {
+	case PresetToday:
+		startTime = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+		endTime = time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 999999999, time.UTC)
+	case PresetThisWeek:
+		weekday := now.Weekday()
+		if weekday == time.Sunday {
+			weekday = 7
+		}
+		weekStart := now.AddDate(0, 0, -int(weekday-time.Monday))
+		startTime = time.Date(weekStart.Year(), weekStart.Month(), weekStart.Day(), 0, 0, 0, 0, time.UTC)
+		endTime = startTime.AddDate(0, 0, 6)
+		endTime = time.Date(endTime.Year(), endTime.Month(), endTime.Day(), 23, 59, 59, 999999999, time.UTC)
+	case PresetThisMonth:
+		startTime = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+		endTime = time.Date(now.Year(), now.Month()+1, 0, 23, 59, 59, 999999999, time.UTC)
+	case PresetLast7Days:
+		endTime = now
+		startTime = now.AddDate(0, 0, -6)
+		startTime = time.Date(startTime.Year(), startTime.Month(), startTime.Day(), 0, 0, 0, 0, time.UTC)
+		endTime = time.Date(endTime.Year(), endTime.Month(), endTime.Day(), 23, 59, 59, 999999999, time.UTC)
+	case PresetLast30Days:
+		endTime = now
+		startTime = now.AddDate(0, 0, -29)
+		startTime = time.Date(startTime.Year(), startTime.Month(), startTime.Day(), 0, 0, 0, 0, time.UTC)
+		endTime = time.Date(endTime.Year(), endTime.Month(), endTime.Day(), 23, 59, 59, 999999999, time.UTC)
+	case PresetCustom:
+		if start == nil || end == nil {
+			return nil, nil, fmt.Errorf("start and end time are required for custom preset")
+		}
+		return start, end, nil
+	default:
+		return nil, nil, fmt.Errorf("unknown preset: %s", preset)
+	}
+
+	return &startTime, &endTime, nil
+}
+
+// QueryProviderStats retrieves aggregated usage statistics grouped by provider.
+func QueryProviderStats(ctx context.Context, pool *pgxpool.Pool, opts QueryOptions) (*ProviderStatsResult, error) {
+	if pool == nil {
+		return nil, fmt.Errorf("pool is not initialized")
+	}
+
+	result := &ProviderStatsResult{
+		Providers: []ProviderStats{},
+		TimeRange: TimeRange{
+			Start: opts.StartTime,
+			End:   opts.EndTime,
+		},
+	}
+
+	// Build WHERE clause
+	whereClause := ""
+	args := []any{}
+	argIdx := 1
+
+	if opts.StartTime != nil || opts.EndTime != nil {
+		whereClause = " WHERE "
+		conditions := []string{}
+
+		if opts.StartTime != nil {
+			conditions = append(conditions, fmt.Sprintf("requested_at >= $%d", argIdx))
+			args = append(args, *opts.StartTime)
+			argIdx++
+		}
+
+		if opts.EndTime != nil {
+			conditions = append(conditions, fmt.Sprintf("requested_at <= $%d", argIdx))
+			args = append(args, *opts.EndTime)
+			argIdx++
+		}
+
+		whereClause += joinConditions(conditions)
+	}
+
+	// Query provider statistics
+	if err := queryProviderStats(ctx, pool, whereClause, args, result); err != nil {
+		return nil, fmt.Errorf("failed to query provider stats: %w", err)
+	}
+
+	return result, nil
+}
+
+func queryProviderStats(ctx context.Context, pool *pgxpool.Pool, whereClause string, args []any, result *ProviderStatsResult) error {
+	// Note: completed_at column may not exist, so we estimate latency from requested_at only
+	query := `
+SELECT
+	COALESCE(provider, 'unknown') as provider,
+	COUNT(*) as total_requests,
+	COUNT(*) FILTER (WHERE NOT failed) as success_count,
+	COUNT(*) FILTER (WHERE failed) as failure_count,
+	COALESCE(SUM(input_tokens), 0) as input_tokens,
+	COALESCE(SUM(output_tokens), 0) as output_tokens,
+	COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens,
+	COALESCE(SUM(cached_tokens), 0) as cached_tokens,
+	COALESCE(SUM(total_tokens), 0) as total_tokens,
+	COALESCE(NULL, 0::float8) as avg_latency_ms,
+	COALESCE(NULL, 0::float8) as p50_latency_ms,
+	COALESCE(NULL, 0::float8) as p95_latency_ms,
+	COALESCE(NULL, 0::float8) as p99_latency_ms,
+	MAX(requested_at) as last_called_at
+FROM usage_records
+` + whereClause + `
+GROUP BY provider
+ORDER BY provider
+`
+
+	rows, err := pool.Query(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var stats ProviderStats
+		if err := rows.Scan(
+			&stats.Name,
+			&stats.TotalRequests,
+			&stats.SuccessCount,
+			&stats.FailureCount,
+			&stats.InputTokens,
+			&stats.OutputTokens,
+			&stats.ReasoningTokens,
+			&stats.CachedTokens,
+			&stats.TotalTokens,
+			&stats.AvgLatencyMs,
+			&stats.P50LatencyMs,
+			&stats.P95LatencyMs,
+			&stats.P99LatencyMs,
+			&stats.LastCalledAt,
+		); err != nil {
+			return err
+		}
+
+		// Calculate success rate
+		if stats.TotalRequests > 0 {
+			stats.SuccessRate = float64(stats.SuccessCount) / float64(stats.TotalRequests) * 100
+		}
+
+		result.Providers = append(result.Providers, stats)
+	}
+
+	return rows.Err()
+}
+
+// QueryVendorErrorLogs retrieves failed vendor error logs with pagination and filters.
+func QueryVendorErrorLogs(ctx context.Context, pool *pgxpool.Pool, opts VendorErrorLogListOptions) (*VendorErrorLogListResult, error) {
+	if pool == nil {
+		return nil, fmt.Errorf("pool is not initialized")
+	}
+
+	page := opts.Page
+	limit := opts.Limit
+	if page <= 0 {
+		page = 1
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 500 {
+		limit = 500
+	}
+
+	conditions := []string{"failed = true"}
+	args := []any{}
+	argIdx := 1
+
+	if opts.Provider != "" {
+		conditions = append(conditions, fmt.Sprintf("provider = $%d", argIdx))
+		args = append(args, opts.Provider)
+		argIdx++
+	}
+
+	if opts.StartTime != nil {
+		conditions = append(conditions, fmt.Sprintf("requested_at >= $%d", argIdx))
+		args = append(args, *opts.StartTime)
+		argIdx++
+	}
+
+	if opts.EndTime != nil {
+		conditions = append(conditions, fmt.Sprintf("requested_at <= $%d", argIdx))
+		args = append(args, *opts.EndTime)
+		argIdx++
+	}
+
+	whereClause := " WHERE " + joinConditions(conditions)
+
+	countQuery := "SELECT COUNT(*) FROM usage_records" + whereClause
+	var total int64
+	if err := pool.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, err
+	}
+
+	offset := (page - 1) * limit
+	limitArg := argIdx
+	offsetArg := argIdx + 1
+	args = append(args, limit, offset)
+
+	query := fmt.Sprintf(`
+SELECT
+	COALESCE(provider, 'unknown') as provider,
+	COALESCE(model, 'unknown') as model,
+	COALESCE(api_key, '') as api_key,
+	COALESCE(auth_id, '') as auth_id,
+	COALESCE(auth_index, '') as auth_index,
+	COALESCE(source, '') as source,
+	requested_at,
+	COALESCE(vendor_error_log, '') as vendor_error_log,
+	COALESCE(request_url, '') as request_url,
+	input_tokens,
+	output_tokens,
+	reasoning_tokens,
+	cached_tokens,
+	total_tokens
+FROM usage_records
+%s
+ORDER BY requested_at DESC, id DESC
+LIMIT $%d OFFSET $%d
+`, whereClause, limitArg, offsetArg)
+
+	rows, err := pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	entries := make([]VendorErrorLogEntry, 0)
+	for rows.Next() {
+		var entry VendorErrorLogEntry
+		if err := rows.Scan(
+			&entry.Provider,
+			&entry.Model,
+			&entry.APIKey,
+			&entry.AuthID,
+			&entry.AuthIndex,
+			&entry.Source,
+			&entry.RequestedAt,
+			&entry.VendorErrorLog,
+			&entry.RequestURL,
+			&entry.InputTokens,
+			&entry.OutputTokens,
+			&entry.ReasoningTokens,
+			&entry.CachedTokens,
+			&entry.TotalTokens,
+		); err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return &VendorErrorLogListResult{
+		Entries: entries,
+		Total:   total,
+		Page:    page,
+		Limit:   limit,
+		TimeRange: TimeRange{
+			Start: opts.StartTime,
+			End:   opts.EndTime,
+		},
+		Provider: opts.Provider,
+	}, nil
 }

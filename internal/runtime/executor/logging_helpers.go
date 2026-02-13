@@ -22,6 +22,7 @@ const (
 	apiAttemptsKey = "API_UPSTREAM_ATTEMPTS"
 	apiRequestKey  = "API_REQUEST"
 	apiResponseKey = "API_RESPONSE"
+	upstreamURLKey = "API_UPSTREAM_URL"
 )
 
 // upstreamRequestLog captures the outbound upstream request details for logging.
@@ -51,11 +52,17 @@ type upstreamAttempt struct {
 
 // recordAPIRequest stores the upstream request metadata in Gin context for request logging.
 func recordAPIRequest(ctx context.Context, cfg *config.Config, info upstreamRequestLog) {
-	if cfg == nil || !cfg.RequestLog {
-		return
-	}
 	ginCtx := ginContextFrom(ctx)
 	if ginCtx == nil {
+		return
+	}
+
+	// Always store upstream URL for usage tracking, even if request logging is disabled
+	if info.URL != "" {
+		ginCtx.Set(upstreamURLKey, util.MaskSensitiveURL(info.URL))
+	}
+
+	if cfg == nil || !cfg.RequestLog {
 		return
 	}
 

@@ -102,9 +102,9 @@ func (p *Plugin) writeRecord(record coreusage.Record) {
 	const insertSQL = `
 INSERT INTO usage_records (
 	provider, model, api_key, auth_id, auth_index, source,
-	requested_at, failed,
+	requested_at, failed, vendor_error_log, request_url,
 	input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 `
 
 	_, err := conn.Exec(ctx, insertSQL,
@@ -116,6 +116,8 @@ INSERT INTO usage_records (
 		record.Source,
 		record.RequestedAt,
 		record.Failed,
+		record.VendorErrorLog,
+		record.RequestURL,
 		record.Detail.InputTokens,
 		record.Detail.OutputTokens,
 		record.Detail.ReasoningTokens,

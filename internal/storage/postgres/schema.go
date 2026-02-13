@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS usage_records (
 	source VARCHAR(128),
 	requested_at TIMESTAMPTZ NOT NULL,
 	failed BOOLEAN NOT NULL DEFAULT FALSE,
+	vendor_error_log TEXT,
+	request_url TEXT,
 	input_tokens BIGINT NOT NULL DEFAULT 0,
 	output_tokens BIGINT NOT NULL DEFAULT 0,
 	reasoning_tokens BIGINT NOT NULL DEFAULT 0,
@@ -46,6 +48,23 @@ var createIndexesSQL = []string{
 	`CREATE INDEX IF NOT EXISTS idx_usage_records_api_key ON usage_records(api_key);`,
 }
 
+func ensureUsageRecordsColumns(ctx context.Context, pool *Pool) error {
+	if pool == nil || pool.Pool() == nil {
+		return fmt.Errorf("pool is not initialized")
+	}
+	conn := pool.Pool()
+	statements := []string{
+		"ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS vendor_error_log TEXT",
+		"ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS request_url TEXT",
+	}
+	for _, stmt := range statements {
+		if _, err := conn.Exec(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // InitSchema initializes the database schema by creating the table and indexes if they don't exist.
 func InitSchema(ctx context.Context, pool *Pool) error {
 	if pool == nil || pool.Pool() == nil {
@@ -62,6 +81,9 @@ func InitSchema(ctx context.Context, pool *Pool) error {
 	}
 
 	if exists {
+		if err := ensureUsageRecordsColumns(ctx, pool); err != nil {
+			return fmt.Errorf("failed to ensure usage_records columns: %w", err)
+		}
 		log.Info("usage_records table already exists")
 		return nil
 	}

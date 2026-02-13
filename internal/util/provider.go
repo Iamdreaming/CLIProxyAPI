@@ -253,6 +253,23 @@ func MaskSensitiveQuery(raw string) string {
 	return strings.Join(parts, "&")
 }
 
+// MaskSensitiveURL masks sensitive query parameters within the URL string.
+func MaskSensitiveURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return trimmed
+	}
+	if parsed.RawQuery == "" {
+		return parsed.String()
+	}
+	parsed.RawQuery = MaskSensitiveQuery(parsed.RawQuery)
+	return parsed.String()
+}
+
 func shouldMaskQueryParam(key string) bool {
 	key = strings.ToLower(strings.TrimSpace(key))
 	if key == "" {

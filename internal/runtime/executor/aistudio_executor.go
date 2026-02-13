@@ -262,7 +262,7 @@ func (e *AIStudioExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth
 		processEvent := func(event wsrelay.StreamEvent) bool {
 			if event.Err != nil {
 				recordAPIResponseError(ctx, e.cfg, event.Err)
-				reporter.publishFailure(ctx)
+				reporter.publishFailure(ctx, event.Err)
 				out <- cliproxyexecutor.StreamChunk{Err: fmt.Errorf("wsrelay: %v", event.Err)}
 				return false
 			}
@@ -303,7 +303,7 @@ func (e *AIStudioExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth
 				return false
 			case wsrelay.MessageTypeError:
 				recordAPIResponseError(ctx, e.cfg, event.Err)
-				reporter.publishFailure(ctx)
+				reporter.publishFailure(ctx, event.Err)
 				out <- cliproxyexecutor.StreamChunk{Err: fmt.Errorf("wsrelay: %v", event.Err)}
 				return false
 			}

@@ -3,12 +3,14 @@ package executor
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/failure"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
 	"github.com/tidwall/gjson"
@@ -43,11 +45,11 @@ func newUsageReporter(ctx context.Context, provider, model string, auth *cliprox
 }
 
 func (r *usageReporter) publish(ctx context.Context, detail usage.Detail) {
-	r.publishWithOutcome(ctx, detail, false)
+	r.publishWithOutcome(ctx, detail, false, nil)
 }
 
-func (r *usageReporter) publishFailure(ctx context.Context) {
-	r.publishWithOutcome(ctx, usage.Detail{}, true)
+func (r *usageReporter) publishFailure(ctx context.Context, err error) {
+	r.publishWithOutcome(ctx, usage.Detail{}, true, err)
 }
 
 func (r *usageReporter) trackFailure(ctx context.Context, errPtr *error) {
@@ -55,11 +57,16 @@ func (r *usageReporter) trackFailure(ctx context.Context, errPtr *error) {
 		return
 	}
 	if *errPtr != nil {
-		r.publishFailure(ctx)
+		r.publishFailure(ctx, *errPtr)
+		// Also track failure in the global failure tracker
+		tracker := failure.GetGlobalFailureTracker()
+		if tracker != nil {
+			_ = tracker.TrackFailure(r.provider, r.model)
+		}
 	}
 }
 
-func (r *usageReporter) publishWithOutcome(ctx context.Context, detail usage.Detail, failed bool) {
+func (r *usageReporter) publishWithOutcome(ctx context.Context, detail usage.Detail, failed bool, err error) {
 	if r == nil {
 		return
 	}
@@ -72,17 +79,24 @@ func (r *usageReporter) publishWithOutcome(ctx context.Context, detail usage.Det
 	if detail.InputTokens == 0 && detail.OutputTokens == 0 && detail.ReasoningTokens == 0 && detail.CachedTokens == 0 && detail.TotalTokens == 0 && !failed {
 		return
 	}
+	requestURL := upstreamURLFromContext(ctx)
+	vendorErrorLog := ""
+	if failed {
+		vendorErrorLog = normalizeVendorErrorLog(err)
+	}
 	r.once.Do(func() {
 		usage.PublishRecord(ctx, usage.Record{
-			Provider:    r.provider,
-			Model:       r.model,
-			Source:      r.source,
-			APIKey:      r.apiKey,
-			AuthID:      r.authID,
-			AuthIndex:   r.authIndex,
-			RequestedAt: r.requestedAt,
-			Failed:      failed,
-			Detail:      detail,
+			Provider:       r.provider,
+			Model:          r.model,
+			Source:         r.source,
+			APIKey:         r.apiKey,
+			AuthID:         r.authID,
+			AuthIndex:      r.authIndex,
+			RequestedAt:    r.requestedAt,
+			Failed:         failed,
+			VendorErrorLog: vendorErrorLog,
+			RequestURL:     requestURL,
+			Detail:         detail,
 		})
 	})
 }
@@ -95,6 +109,7 @@ func (r *usageReporter) ensurePublished(ctx context.Context) {
 	if r == nil {
 		return
 	}
+	requestURL := upstreamURLFromContext(ctx)
 	r.once.Do(func() {
 		usage.PublishRecord(ctx, usage.Record{
 			Provider:    r.provider,
@@ -105,6 +120,7 @@ func (r *usageReporter) ensurePublished(ctx context.Context) {
 			AuthIndex:   r.authIndex,
 			RequestedAt: r.requestedAt,
 			Failed:      false,
+			RequestURL:  requestURL,
 			Detail:      usage.Detail{},
 		})
 	})
@@ -173,6 +189,54 @@ func resolveUsageSource(auth *cliproxyauth.Auth, ctxAPIKey string) string {
 		return trimmed
 	}
 	return ""
+}
+
+func upstreamURLFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	ginCtx, ok := ctx.Value("gin").(*gin.Context)
+	if !ok || ginCtx == nil {
+		return ""
+	}
+	if value, exists := ginCtx.Get(upstreamURLKey); exists {
+		switch v := value.(type) {
+		case string:
+			return v
+		case fmt.Stringer:
+			return v.String()
+		default:
+			return fmt.Sprintf("%v", v)
+		}
+	}
+	return ""
+}
+
+func normalizeVendorErrorLog(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, context.Canceled) {
+		return "Request interrupted by user"
+	}
+	message := strings.TrimSpace(err.Error())
+	if message == "" {
+		return ""
+	}
+	lower := strings.ToLower(message)
+	if strings.Contains(lower, "context canceled") || strings.Contains(lower, "context cancelled") {
+		return "Request interrupted by user"
+	}
+
+	var statusCoder interface{ StatusCode() int }
+	if errors.As(err, &statusCoder) && statusCoder.StatusCode() >= 400 {
+		summarized := strings.TrimSpace(summarizeErrorBody("", []byte(message)))
+		if summarized != "" {
+			return summarized
+		}
+	}
+
+	return message
 }
 
 func parseCodexUsage(data []byte) (usage.Detail, bool) {
