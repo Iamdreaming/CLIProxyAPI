@@ -6,7 +6,6 @@
 package claude
 
 import (
-	"bytes"
 	"fmt"
 	"strconv"
 	"strings"
@@ -35,7 +34,7 @@ import (
 // Returns:
 //   - []byte: The transformed request data in internal client format
 func ConvertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool) []byte {
-	rawJSON := bytes.Clone(inputRawJSON)
+	rawJSON := inputRawJSON
 
 	template := `{"model":"","instructions":"","input":[]}`
 
@@ -223,6 +222,10 @@ func ConvertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 					reasoningEffort = effort
 				}
 			}
+		case "adaptive":
+			// Claude adaptive means "enable with max capacity"; keep it as highest level
+			// and let ApplyThinking normalize per target model capability.
+			reasoningEffort = string(thinking.LevelXHigh)
 		case "disabled":
 			if effort, ok := thinking.ConvertBudgetToLevel(0); ok && effort != "" {
 				reasoningEffort = effort

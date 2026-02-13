@@ -276,27 +276,42 @@ func (s *Service) wsOnDisconnected(channelID string, reason error) {
 }
 
 func (s *Service) applyCoreAuthAddOrUpdate(ctx context.Context, auth *coreauth.Auth) {
-	if s == nil || auth == nil || auth.ID == "" {
-		return
-	}
-	if s.coreManager == nil {
+	if s == nil || s.coreManager == nil || auth == nil || auth.ID == "" {
 		return
 	}
 	auth = auth.Clone()
 	s.ensureExecutorsForAuth(auth)
-	s.registerModelsForAuth(auth)
-	if existing, ok := s.coreManager.GetByID(auth.ID); ok && existing != nil {
+
+	// IMPORTANT: Update coreManager FIRST, before model registration.
+	// This ensures that configuration changes (proxy_url, prefix, etc.) take effect
+	// immediately for API calls, rather than waiting for model registration to complete.
+	// Model registration may involve network calls (e.g., FetchAntigravityModels) that
+	// could timeout if the new proxy_url is unreachable.
+	op := "register"
+	var err error
+	if existing, ok := s.coreManager.GetByID(auth.ID); ok {
 		auth.CreatedAt = existing.CreatedAt
 		auth.LastRefreshedAt = existing.LastRefreshedAt
 		auth.NextRefreshAfter = existing.NextRefreshAfter
-		if _, err := s.coreManager.Update(ctx, auth); err != nil {
-			log.Errorf("failed to update auth %s: %v", auth.ID, err)
+		op = "update"
+		_, err = s.coreManager.Update(ctx, auth)
+	} else {
+		_, err = s.coreManager.Register(ctx, auth)
+	}
+	if err != nil {
+		log.Errorf("failed to %s auth %s: %v", op, auth.ID, err)
+		current, ok := s.coreManager.GetByID(auth.ID)
+		if !ok || current.Disabled {
+			GlobalModelRegistry().UnregisterClient(auth.ID)
+			return
 		}
-		return
+		auth = current
 	}
-	if _, err := s.coreManager.Register(ctx, auth); err != nil {
-		log.Errorf("failed to register auth %s: %v", auth.ID, err)
-	}
+
+	// Register models after auth is updated in coreManager.
+	// This operation may block on network calls, but the auth configuration
+	// is already effective at this point.
+	s.registerModelsForAuth(auth)
 }
 
 func (s *Service) applyCoreAuthRemoval(ctx context.Context, id string) {
@@ -386,6 +401,8 @@ func (s *Service) ensureExecutorsForAuth(a *coreauth.Auth) {
 		s.coreManager.RegisterExecutor(executor.NewQwenExecutor(s.cfg))
 	case "iflow":
 		s.coreManager.RegisterExecutor(executor.NewIFlowExecutor(s.cfg))
+	case "kimi":
+		s.coreManager.RegisterExecutor(executor.NewKimiExecutor(s.cfg))
 	default:
 		providerKey := strings.ToLower(strings.TrimSpace(a.Provider))
 		if providerKey == "" {
@@ -731,6 +748,13 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 		provider = "openai-compatibility"
 	}
 	excluded := s.oauthExcludedModels(provider, authKind)
+	// The synthesizer pre-merges per-account and global exclusions into the "excluded_models" attribute.
+	// If this attribute is present, it represents the complete list of exclusions and overrides the global config.
+	if a.Attributes != nil {
+		if val, ok := a.Attributes["excluded_models"]; ok && strings.TrimSpace(val) != "" {
+			excluded = strings.Split(val, ",")
+		}
+	}
 	var models []*ModelInfo
 	switch provider {
 	case "gemini":
@@ -791,6 +815,9 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 		models = applyExcludedModels(models, excluded)
 	case "iflow":
 		models = registry.GetIFlowModels()
+		models = applyExcludedModels(models, excluded)
+	case "kimi":
+		models = registry.GetKimiModels()
 		models = applyExcludedModels(models, excluded)
 	default:
 		// Handle OpenAI-compatibility providers by name using config
